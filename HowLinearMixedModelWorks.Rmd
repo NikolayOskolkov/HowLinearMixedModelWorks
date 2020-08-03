@@ -1,0 +1,249 @@
+---
+title: "How Linear Mixed Model Works"
+author: "Nikolay Oskolkov, SciLifeLab, NBIS Long Term Support, nikolay.oskolkov@scilifelab.se"
+date: "June 14, 2020"
+output:
+  html_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+abstract: |
+  In this tutorial, we cover basic concepts of Linear Modelling in R, and compare Frequentist and Bayesian approaches. We start with a basic Ordinary Least Squeres Linear Regression model and show how it can be improved by accounting for non-independent observations within Linear Mixed Models (LMM) formalism. Finally, we extend Frequentist LMM for Bayesian Multilevel Models and emphasize the difference between the two approaches.
+---
+
+```{r new setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="/home/nikolay/Documents/Medium/LinearMixedModelFromScratch")
+```
+
+
+### Ordinary Least Squares Linear Regression
+
+As a test data set we will use a sleep deprevation study data set [1], where sleeping time of all individuals was restricted and reaction of their organism on a series of tests every day was meeasured during 10 days. Let us have a look at the data set, it seems to include 3 variables: 1) Reaction, 2) Days, 3) Subject, i.e. the same individual was followed during 10 days.
+
+```{r Check data set}
+library("lme4")
+head(sleepstudy,20)
+str(sleepstudy)
+```
+
+Another important thing we can notice is that there are 18 individuals in the sleep deprivation study. Let us now check how the reaction of all individuals changed as a response to sleep deprivation. For this purpose, we will fit an Ordinary Least Squares Linear Regression with one response variable (Reaction) and one predictor / explanatory variable (Days): 
+
+```{r Ordinary Least Squares,fig.width=10,fig.height=8}
+library("ggplot2")
+summary(lm(Reaction~Days,data=sleepstudy))
+ggplot(sleepstudy,aes(x=Days,y=Reaction)) + geom_point() + geom_smooth(method="lm")
+```
+
+We can see that it has a increasing trend but with a lot of variation between days and individuals. Looking at the summary of linear regression fit we conclude that the slope is significantly different from zero, i.e. there is a statistically significant increasing relation between Reaction and Days.
+
+The confidence interval (grey area around the fitting line) is delivered automatically in "ggplot" but what does it mean? In the classical Frequentist Statistics there is a definition of 95% confidence according to the formula:
+
+\[\left( \textrm{median} - 1.96 \frac{\textrm{sd}}{\sqrt n} ;\quad  \textrm{median} + 1.96 \frac{\textrm{sd}}{\sqrt n} \right)\]
+
+The magic number 1.96 originates from the Gaussian distribution and reflects the Z-score value covering 95% of the data in the distribution. To further demostrate how the confidence interval is calculated under the hood by ggplot we implement the same Linear Regression fitting in plain R using "predict" function and display the table of confidence interval points:
+
+
+```{r plain R confint,fig.width=10,fig.height=8}
+#PLAIN R IMPLEMENTATION OF CONFIDENCE INTERVAL
+plot(Reaction~Days,data=sleepstudy)
+abline(lm(Reaction~Days,data=sleepstudy), col="blue")
+conf_interval <- predict(lm(Reaction~Days,data=sleepstudy), newdata=data.frame(Days=seq(0,9,by=0.1)), interval="confidence", level = 0.95)
+lines(seq(0,9,by=0.1), conf_interval[,2], col="blue", lty=2)
+lines(seq(0,9,by=0.1), conf_interval[,3], col="blue", lty=2)
+head(conf_interval)
+```
+
+Here "fit" reflects the median value at each Days point, "lwr" and "upr" correspond to upper and lower confidence interval boundaries.
+
+Everything looks great! However, we have a severe problem with the fitting above. Ordinary Least Squares Linear Regression assumes that all the observations (data points on the plot) are independent, which will result in uncorrelated and hence Gaussian distributed residuals. However, we know that the data points on the plot belong to 18 individuals, i.e. 10 points for each individual. In principal, we can fit a linear model for each individual separately:
+
+```{r Linear Fit Per Individual xyplot,include=FALSE, echo=FALSE, eval=FALSE,fig.width=10,fig.height=8}
+library("lattice")
+xyplot(Reaction ~ Days | Subject, sleepstudy, type = c("g","p","r"),
+       index = function(x,y) coef(lm(y ~ x))[1],
+       xlab = "Days of sleep deprivation",
+       ylab = "Average reaction time (ms)", aspect = "xy")
+```
+
+```{r Linear Fit Per Individual ggplot,fig.width=10,fig.height=8}
+ggplot(sleepstudy, aes(x = Days, y = Reaction)) +
+    geom_smooth(method = "lm", level = 0.95) + geom_point() + facet_wrap(~Subject, nrow = 3, ncol = 6)
+```
+
+We can see that most of the individuals have increasing Reaction profile while some have a neutral or even decreasing profile. What does it mean and what can we do here? Did we capture all the variation in the data with our simple Ordinary Least Squares Linear Regression model?
+
+When the observations (data points on the plot) are not independent they should be modelled via so-called Random Effects model (in terms of classical Frequentist statistics), which is nothing else as a Prior distribution put on the coefficients of the linear model withing the Bayesian framework (we will come back to this later). Random Effects modelling is a part of so-called Mixed Models (Linear Mixed models, Linear Mixed Effects models).
+
+
+### Linear Mixed Models (LMM)
+
+When we use Linear Mixed Models (LMM) we assume that there is a non-independence between observations. In our case, the observations cluster for each individual. It can be different types of clustering, for eaxample individuals might be genetically related, i.e. cluter in different families or populations. Alternatively, it can be technical replicates from the same individuals which are useful to include into the analysis (to capture technical variation) instead of including averege values (across technical replicates) into the analysis. A calssical setup for LMM is "repeated measurements" or "time series", i.e. when the same individual is measured many times during a log period. It can be e.g. effect of treatment or desease evolving in time and followed by clinicians.
+
+Lets us fir Random Effects model with random slopes and random intercepts:
+
+```{r Random Effects Fitting}
+library("lme4")
+summary(lmer(Reaction ~ Days + (Days | Subject), sleepstudy))
+```
+
+Let us compare resudual error between fixed effects (lm) and random effects (lmer) models:
+
+```{r}
+sqrt(sum(residuals(lm(Reaction~Days,data=sleepstudy))^2)/(dim(sleepstudy)[1]-2))
+sqrt(sum(resid(lmer(Reaction ~ Days + (Days | Subject), sleepstudy))^2)/(dim(sleepstudy)[1]-2))
+```
+
+The resudual error decreased for the Random Effects model meaning that we captured more phenotypic variation within the Random Effects model. Let us also compare AIC:
+
+```{r}
+fit1<-lm(Reaction~Days,data=sleepstudy)
+fit2<-lmer(Reaction ~ Days + (Days | Subject), sleepstudy, REML=FALSE)
+anova(fit2,fit1)
+```
+
+Again we see a significant improvement of modeling by introducing Random Effects. AIC and BIC are lower for the Random Effects Model, i.e. this model is more informative and explains more variation in the data by accounting for groupping the points between the 18 individuals.
+
+Another strength of LMM is that it fits all individuals simultaneously but non-independently, i.e. all fits "know" about each other. In this way, slopes, intercepts and confidence intervals of fits for each individual are influenced by their common statistics (shared variance), this effect is called "the shrinkage toward the mean". 
+
+Nice! We see that LMM captures more variation in the data. Now, can we visualize the variation of LMM vs. variation of the Fixed Effects fit? How can we see the shrinkage toward the mean effect? Let us start with the population level (overall / average) fit and apply a bootstrapping procedure to lmer, we will perform resampling with replacement randomly removing 75% of data points and performing the LMM fit a number of times. As a result a matrix of bootsrapped statistics (slopes, intercepts and variances) will be bult.
+
+```{r Bootstrap LMM, fig.width=10, fig.height=8, message=FALSE, warning=FALSE}
+N_boot <- 1000
+control = lmerControl(check.conv.singular = .makeCC(action = "ignore",  tol = 1e-4))
+#DEFINE MATRICES OF POPULATION AND INDIVIDUAL LEVEL DATA POINTS AND PERFORM BOOTSTRAPPING
+intercept_fixef <- vector(); slope_fixef <- vector()
+newdata_pop_level <- data.frame(Days = seq(0, 9, by = 1))
+datapoints_fixef <- matrix(ncol = N_boot, nrow = dim(newdata_pop_level)[1])
+newdata_individ_level <- data.frame(Days = sleepstudy$Days, Subject = sleepstudy$Subject)
+datapoints_individ_level <- matrix(ncol = N_boot, nrow = dim(newdata_individ_level)[1])
+for(i in 1:N_boot)
+{
+  sleepstudy_boot <- sleepstudy[sample(1:dim(sleepstudy)[1], dim(sleepstudy)[1]*0.25, replace = TRUE),]
+  lmerfit_boot <- lmer(Reaction ~ Days + (Days | Subject), sleepstudy_boot, control = control)
+  intercept_fixef <- append(intercept_fixef, as.numeric(fixef(lmerfit_boot)[1]))
+  slope_fixef <- append(slope_fixef, as.numeric(fixef(lmerfit_boot)[2]))
+  datapoints_individ_level[,i] <- predict(lmerfit_boot, newdata_individ_level, allow.new.levels = TRUE)
+}
+fixef_df <- data.frame(Intercept = intercept_fixef, Days = slope_fixef)
+for(i in 1:N_boot) 
+{
+  datapoints_fixef[,i] <- model.matrix(~1+Days,data=newdata_pop_level) %*% as.matrix(fixef_df)[i,]
+}
+bootstrap_conf_interval_pop_level <- data.frame(Days = seq(0, 9, by = 1),
+                                      lwr = apply(datapoints_fixef, 1, quantile, prob = 0.05),
+                                      fit = apply(datapoints_fixef, 1, quantile, prob = 0.5),
+                                      upr = apply(datapoints_fixef, 1, quantile, prob = 0.95))
+#PLOT POPULATION LEVEL CONFIDENCE INTERVALS
+p1 <- ggplot(sleepstudy, aes(x = Days, y = Reaction)) + geom_point(shape = 1) + 
+  geom_abline(data = fixef_df, alpha = 0.1, size = 2, aes(intercept = Intercept, slope = Days)) + 
+  geom_smooth(method = "lm", color = "blue", size = 0.5)
+p2 <- ggplot(sleepstudy, aes(x = Days, y = Reaction)) + geom_point(shape = 1) + 
+  geom_smooth(method = "lm", color = "blue", size = 0.5) + 
+  geom_line(data = bootstrap_conf_interval_pop_level, aes(y = fit), size = 0.5, color = "red") + 
+  geom_line(data = bootstrap_conf_interval_pop_level, aes(y = lwr), lty = 2, color = "red", size = 0.5) + 
+  geom_line(data = bootstrap_conf_interval_pop_level, aes(y = upr), lty = 2, color = "red", size = 0.5)
+library("gridExtra")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+Here we plot the Fixed Effects fit together with individual bootstrapped fits (left plot), and the Fixed Effects fit together with bootstrapped mean fit and confidence intervals (right plot). We can see that the average / mean fit for LMM (lmer, red line, right plot) is identical to the Fixed Effects Model (lm, blue line on both plots), the difference is hardly noticable, they overlap pretty well. However, individual bootstrapped fits (black thick lines, left plot) and the confidence intervals for LMM (red dashed line, right plot) are wider than for the Fixed Effects fit (grey area on both plots). This difference is partly due to the fact that Fixed Effects Model does not account for the inter-individual variation in contrast to LMM that accounts for both population-wide and inter-individual variations.  
+
+Another interesting thing is that  we observe variation of Slope and Intercept around their mean values.
+
+```{r Hist Slopes and Intercepts,fig.width=10,fig.height=8}
+#PLOT HISTOGRAMS OF SLOPES AND INTERCEPTS OF FIXED EFFECTS
+par(mfrow = c(1, 2))
+hist(fixef_df$Intercept, breaks = 100, col = "darkgreen", xlab = "Intercept", main = "Bootstrapped Intercept Values")
+hist(fixef_df$Days, breaks = 100, col = "darkred", xlab = "Slope / Days", main = "Bootstrapped Slope Values")
+```
+
+Therefore, one can conclude that the bootstrapping procedure for building confidence intervals within Frequentist framework can be viewed as allowing variation of slopes and intercepts and sampling their plausible values from the distributions above. This resembles a lot Bayesian statistics. Indeed, bootstrapping has a lot to do with the working horse of Bayesian stats which is Markov Chain Monte Carlo (MCMC). In other words, Frequentist analysis with bootstrapping is to a large exent equivalent to Bayesian analysis, we will see it in more details later.
+
+What about individual slopes, intercepts and confidence intervals for each of the 18 individuals? Here we again plot their Fixed Effects statistics together with LMM statistics.
+
+```{r Individual Level,fig.width=10,fig.height=8}
+bootstrap_conf_interval_individ_level <- data.frame(Days = sleepstudy$Days, Subject = sleepstudy$Subject,
+                                      lwr = apply(datapoints_individ_level, 1, quantile, prob = 0.05),
+                                      fit = apply(datapoints_individ_level, 1, quantile, prob = 0.5),
+                                      upr = apply(datapoints_individ_level, 1, quantile, prob = 0.95))
+#PLOT INDIVIDUAL LEVEL CONFIDENCE INTERVALS
+ggplot(sleepstudy, aes(x = Days, y = Reaction)) + geom_point(size = 1) +
+  geom_smooth(method = "lm", level = 0.95, size = 0.5) + facet_wrap(~Subject, nrow = 3, ncol = 6) + 
+  geom_line(data = bootstrap_conf_interval_individ_level, aes(y = fit), size = 0.5, color = "red") + 
+  geom_line(data = bootstrap_conf_interval_individ_level, aes(y = lwr), lty = 2, size = 0.5, color = "red") + 
+  geom_line(data = bootstrap_conf_interval_individ_level, aes(y = upr), lty = 2, size = 0.5, color = "red")
+```
+
+Again, red solid and dashed lines correspond to the LMM fit while blue solid line and the grey area depict Fixed Effects Model. We can see that individual LMM fits and their confidence intervals might be very different from the Fixed Effects (lm) model. In other words the individual fits are "shrunk" toward the common mean, all the fits help each other to stabilize variance so that the model does not get excited about extreme / outlying values. This leads to a more stable and correct fitting procedure.  
+
+
+### Maximum Likelihood (ML) vs. Bayesian Fitting
+
+Before we move to the Bayesian Multilevel Models, let us briefly introduce the major differences between Frequentist and Bayesian Statistics.
+
+Frequentist fitting used by LMM via lme4/lmer is based on Maximum Likelihood principle:
+
+\[y = \alpha+\beta x\]
+\[L(y) \sim e^{-\frac{(y-\alpha-\beta x)^2}{2\sigma^2}}\]
+\[\max_{\alpha,\beta,\sigma}L(y) \Longrightarrow \hat\alpha, \hat\beta, \hat\sigma\]
+
+Here, we maximize the likelihood L(y) of observing the data y, which is equivalent to minimizing residuals of the model (Ordinary Least Squares approach). Now ask youself a rhetoric question: why should we maximize a probability of observing the data if we have already observed the data? 
+
+Bayesian fitting is based on Maximum Posterior Probability principle: we assume that the data is distributed with some (Normal in our case) likelihood L(y) and set Prior assimtions on the parameters of the Liner Model.
+
+\[y \sim \it N(\mu,\sigma) \quad\textrm{- Likelihood L(y)}\]
+\[\mu = \alpha + \beta x\]
+\[\alpha \sim \it N(\mu_\alpha,\sigma_\alpha) \quad\textrm{- Prior on} \quad\alpha\]
+\[\beta \sim \it N(\mu_\beta,\sigma_\beta) \quad\textrm{- Prior on} \quad\beta\]
+\[P(\mu_\alpha,\sigma_\alpha,\mu_\beta,\sigma_\beta,\sigma) \sim  L(y)*N(\mu_\alpha,\sigma_\alpha)*N(\mu_\beta,\sigma_\beta)\]
+\[\max_{\mu_\alpha,\sigma_\alpha,\mu_\beta,\sigma_\beta,\sigma}P(\mu_\alpha,\sigma_\alpha,\mu_\beta,\sigma_\beta,\sigma) \Longrightarrow \hat\mu_\alpha,\hat\sigma_\alpha,\hat\mu_\beta,\hat\sigma_\beta,\hat\sigma\]
+
+Here we calculate a probability distribution of parameters (and not the data) of the model which automatically gives us uncertainties (Credible Intervals) on the parameters.
+
+
+### Bayesian Multilevel Models
+
+Linear Mixed Models (LMM) with Bayesian Prior distributions applied to the parameters are called Bayesian Multilevel Models or Bayesian Hierarcical Models. To implement Bayesian fitting in R, here we will use "brms" package which has absolutely the same syntax as lme4 / lmer. One important difference which one should remember is that fitting LMM via lme4 / lmer uses Maximum Likelihood (ML) principle, i.e. it does not use prior assumptions about the parameters (or rather uses flat Priors) while Bayesian Multilevel Models in brms set reasonable priors which reflect the data. Another thing which is worth mentioning is that brms runs probabilistoc programming software / language Stan under the hood. Let us do Bayesian fitting with brms:
+
+```{r brm fit, message=FALSE, warning=FALSE, results = FALSE}
+library("brms")
+options(mc.cores = parallel::detectCores())  # Multi-threading chanis
+brmfit <- brm(Reaction ~ Days + (Days | Subject), data = sleepstudy, 
+              family = gaussian, iter = 2000, chains = 4)
+```
+
+Again, let us display the population level (overall / average) fit for all individuals:
+
+```{r brm plot average,fig.width=10,fig.height=8}
+newdata_pop_level <- data.frame(Days = seq(0, 9, by = 1))
+brmfit_Q <- fitted(brmfit, newdata_pop_level, re_formula=NA, probs=c(0.05, 0.5, 0.95))
+bayesian_conf_interval_pop_level <- data.frame(Days = seq(0, 9, by = 1), lwr = brmfit_Q[,"Q5"],
+                                      fit = brmfit_Q[,"Q50"], upr = brmfit_Q[,"Q95"])
+ggplot(sleepstudy, aes(x = Days, y = Reaction)) + geom_point() + 
+  geom_smooth(method="lm") + 
+  geom_line(data = bayesian_conf_interval_pop_level, aes(y = fit), size = 1, color = "red") + 
+  geom_line(data = bayesian_conf_interval_pop_level, aes(y = lwr), lty = 2, color = "red") + 
+  geom_line(data = bayesian_conf_interval_pop_level, aes(y = upr), lty = 2, color = "red")
+```
+
+The result of Bayesian fitting with brms looks very similar to the LMM fitting with lme4 / lmer. Essential difference is that the Bayesian Multilevel Models (brm) are much more stable compared to Maximum Likelihod models (lm, lmer) because Priors ensure better convergence of the model, and calculation of Credible Intervals is much more straightforward for brm compated to lmer. Now, what about individual fits?
+
+```{r brm plot individual,fig.width=10,fig.height=8}
+newdata_individ_level <- data.frame(Days = sleepstudy$Days, Subject = sleepstudy$Subject)
+brmfit_Q <- fitted(brmfit, newdata_individ_level, probs = c(0.05, 0.5, 0.95))
+bayesian_conf_interval_individ_level <- data.frame(Days = sleepstudy$Days, Subject = sleepstudy$Subject,
+                                      lwr = brmfit_Q[,"Q5"], fit = brmfit_Q[,"Q50"], upr = brmfit_Q[,"Q95"])
+ggplot(sleepstudy, aes(x = Days, y = Reaction)) + 
+  geom_smooth(method = "lm", level = 0.95, size = 0.5) + geom_point(size = 1) + 
+  facet_wrap(~Subject, nrow = 3, ncol = 6) + 
+  geom_line(data = bayesian_conf_interval_individ_level, aes(y = fit), size = 0.5, color = "red") + 
+  geom_line(data = bayesian_conf_interval_individ_level, aes(y = lwr), lty = 2, size = 0.5, color = "red") + 
+  geom_line(data = bayesian_conf_interval_individ_level, aes(y = upr), lty = 2, size = 0.5, color = "red")
+```
+
+Again, the slopes, intercepts and credible intervals look very different between the Fixed Effects (blue lines, grey area confidence intervals) fit and the LMM fit (red solid line fit, red dashed lines confidence intervals). This is the effect of accounting for individual level variation in the data by the Bayesian Multilevel model.
+
+### References
+
+[1] Gregory Belenky, Nancy J. Wesensten, David R. Thorne, Maria L. Thomas, Helen C. Sing, Daniel P. Redmond, Michael B. Russo and Thomas J. Balkin (2003) Patterns of performance degradation and restoration during sleep restriction and subsequent recovery: a sleep dose-response study. Journal of Sleep Research 12, 1–12.
